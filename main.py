@@ -7,13 +7,15 @@ from aiogram.contrib.middlewares.logging import LoggingMiddleware
 from aiogram.types import ReplyKeyboardMarkup, InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.utils import executor
 
+
 API_TOKEN = os.getenv("BOT_TOKEN")
-ADMIN_CHAT_ID = int(os.getenv("ADMIN_CHAT_ID", "123456789"))  # укажи свой ID или через переменную
-REQUESTS_FILE = "requests.csv"
+# Берём ровно то, что ты задал в Render
+ADMIN_CHAT_ID = int(os.getenv("CHAT_ID"))  # важно: имя ключа должно совпадать с Render
 
 bot = Bot(token=API_TOKEN)
 dp = Dispatcher(bot)
 dp.middleware.setup(LoggingMiddleware())
+
 
 # Инициализация CSV
 def init_csv():
