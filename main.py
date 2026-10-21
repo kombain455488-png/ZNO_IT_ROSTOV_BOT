@@ -7,7 +7,7 @@ from aiogram.contrib.middlewares.logging import LoggingMiddleware
 from aiogram.types import ReplyKeyboardMarkup, InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.utils import executor
 
-# --- ПЕРЕМЕННЫЕ (сначала всё объявляем) ---
+# --- ПЕРЕМЕННЫЕ ---
 API_TOKEN = os.getenv("BOT_TOKEN")
 CHAT_ID_RAW = os.getenv("CHAT_ID")
 
@@ -26,37 +26,40 @@ def init_csv():
     if not os.path.exists(REQUESTS_FILE):
         with open(REQUESTS_FILE, "w", newline="", encoding="utf-8") as f:
             writer = csv.writer(f)
-            writer.writerow(["id", "name", "phone", "description", "status", "timestamp"])
+            # Добавили user_id, чтобы потом написать клиенту
+            writer.writerow(["id", "user_id", "name", "phone", "description", "status", "timestamp"])
 
-init_csv()  # вызываем только после объявления REQUESTS_FILE
+init_csv()
 
-def save_request(name, phone, description, status="new"):
+def save_request(user_id, name, phone, description, status="new"):
     req_id = int(time.time())
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     with open(REQUESTS_FILE, "a", newline="", encoding="utf-8") as f:
         writer = csv.writer(f)
-        writer.writerow([req_id, name, phone, description, status, timestamp])
+        writer.writerow([req_id, user_id, name, phone, description, status, timestamp])
     return req_id
 
 def mark_as_done(req_id):
     rows = []
     found = False
+    target_user_id = None
     with open(REQUESTS_FILE, "r", newline="", encoding="utf-8") as f:
         reader = csv.DictReader(f)
         for row in reader:
             if int(row["id"]) == req_id:
                 row["status"] = "done"
                 found = True
+                target_user_id = row["user_id"]  # Запоминаем user_id клиента
             rows.append(row)
 
     if found:
         with open(REQUESTS_FILE, "w", newline="", encoding="utf-8") as f:
-            fieldnames = ["id", "name", "phone", "description", "status", "timestamp"]
+            fieldnames = ["id", "user_id", "name", "phone", "description", "status", "timestamp"]
             writer = csv.DictWriter(f, fieldnames=fieldnames)
             writer.writeheader()
             writer.writerows(rows)
-        return True
-    return False
+        return True, target_user_id
+    return False, None
 
 # --- КЛАВИАТУРЫ ---
 menu_kb = ReplyKeyboardMarkup(resize_keyboard=True)
@@ -76,12 +79,12 @@ async def cmd_start(message: types.Message):
 
 @dp.message_handler(lambda m: m.text == "🆕 Создать обращение")
 async def start_request(message: types.Message):
-    user_states[message.from_user.id] = {"step": "name", "data": {}}
+    # Сохраняем user_id сразу при старте диалога
+    user_states[message.from_user.id] = {"step": "name", "data": {"user_id": message.from_user.id}}
     await message.answer("Напишите ваше имя или название организации:")
 
 @dp.message_handler(lambda m: m.from_user.id in user_states)
 async def collect_request(message: types.Message):
-    # Отладочная строка: увидишь в логах Render, какой ID реально берётся
     print(f"DEBUG: Sending to ADMIN_CHAT_ID={ADMIN_CHAT_ID}")
 
     state = user_states.get(message.from_user.id)
@@ -100,7 +103,8 @@ async def collect_request(message: types.Message):
     elif state["step"] == "desc":
         data["description"] = message.text
 
-        req_id = save_request(data["name"], data["phone"], data["description"])
+        # Передаём user_id в save_request
+        req_id = save_request(data["user_id"], data["name"], data["phone"], data["description"])
 
         inline_kb = InlineKeyboardMarkup()
         inline_kb.add(InlineKeyboardButton("✅ Сделано", callback_data=f"done_{req_id}"))
@@ -130,7 +134,19 @@ async def process_done(callback_query: types.CallbackQuery):
     _, req_id_str = callback_query.data.split("_", 1)
     req_id = int(req_id_str)
 
-    if mark_as_done(req_id):
+    success, target_user_id = mark_as_done(req_id)
+
+    if success and target_user_id:
+        # Уведомляем клиента
+        try:
+            await bot.send_message(
+                int(target_user_id),
+                f"✅ Ваша заявка #{req_id} выполнена! Спасибо за обращение."
+            )
+        except Exception as e:
+            # Если клиент заблокировал бота — просто логируем и продолжаем
+            print(f"DEBUG: Не удалось отправить уведомление клиенту (возможно, бот заблокирован): {e}")
+
         await callback_query.message.edit_text(
             f"{callback_query.message.text}\n\n✅ Заявка #{req_id} помечена как выполненная."
         )
