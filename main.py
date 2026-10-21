@@ -7,24 +7,28 @@ from aiogram.contrib.middlewares.logging import LoggingMiddleware
 from aiogram.types import ReplyKeyboardMarkup, InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.utils import executor
 
-
+# --- ПЕРЕМЕННЫЕ (сначала всё объявляем) ---
 API_TOKEN = os.getenv("BOT_TOKEN")
-# Берём ровно то, что ты задал в Render
-ADMIN_CHAT_ID = int(os.getenv("CHAT_ID"))  # важно: имя ключа должно совпадать с Render
+CHAT_ID_RAW = os.getenv("CHAT_ID")
+
+if not CHAT_ID_RAW:
+    raise RuntimeError("Переменная окружения CHAT_ID не задана! Зайди в Render → Environment и добавь её.")
+
+ADMIN_CHAT_ID = int(CHAT_ID_RAW)
+REQUESTS_FILE = "requests.csv"
 
 bot = Bot(token=API_TOKEN)
 dp = Dispatcher(bot)
 dp.middleware.setup(LoggingMiddleware())
 
-
-# Инициализация CSV
+# --- РАБОТА С CSV ---
 def init_csv():
     if not os.path.exists(REQUESTS_FILE):
         with open(REQUESTS_FILE, "w", newline="", encoding="utf-8") as f:
             writer = csv.writer(f)
             writer.writerow(["id", "name", "phone", "description", "status", "timestamp"])
 
-init_csv()
+init_csv()  # вызываем только после объявления REQUESTS_FILE
 
 def save_request(name, phone, description, status="new"):
     req_id = int(time.time())
@@ -54,11 +58,14 @@ def mark_as_done(req_id):
         return True
     return False
 
-# Меню внизу экрана
-menu_kb = ReplyKeyboardMarkup(resize_keyboard=True, one_time_keyboard=False)
+# --- КЛАВИАТУРЫ ---
+menu_kb = ReplyKeyboardMarkup(resize_keyboard=True)
 menu_kb.add("🆕 Создать обращение")
 menu_kb.add("❓ Помощь / О нас")
 
+user_states = {}
+
+# --- ХЕНДЛЕРЫ ---
 @dp.message_handler(commands=["start"])
 async def cmd_start(message: types.Message):
     await message.answer(
@@ -67,15 +74,16 @@ async def cmd_start(message: types.Message):
         reply_markup=menu_kb
     )
 
-# Обработка кнопки «Создать обращение»
 @dp.message_handler(lambda m: m.text == "🆕 Создать обращение")
 async def start_request(message: types.Message):
     user_states[message.from_user.id] = {"step": "name", "data": {}}
     await message.answer("Напишите ваше имя или название организации:")
 
-# Сбор данных по шагам
 @dp.message_handler(lambda m: m.from_user.id in user_states)
 async def collect_request(message: types.Message):
+    # Отладочная строка: увидишь в логах Render, какой ID реально берётся
+    print(f"DEBUG: Sending to ADMIN_CHAT_ID={ADMIN_CHAT_ID}")
+
     state = user_states.get(message.from_user.id)
     if not state:
         return
@@ -85,18 +93,15 @@ async def collect_request(message: types.Message):
         data["name"] = message.text
         state["step"] = "phone"
         await message.answer("Укажите номер телефона для связи:")
-
     elif state["step"] == "phone":
         data["phone"] = message.text
         state["step"] = "desc"
         await message.answer("Опишите проблему или задачу (коротко):")
-
     elif state["step"] == "desc":
         data["description"] = message.text
 
         req_id = save_request(data["name"], data["phone"], data["description"])
 
-        # Кнопка «✅ Сделано»
         inline_kb = InlineKeyboardMarkup()
         inline_kb.add(InlineKeyboardButton("✅ Сделано", callback_data=f"done_{req_id}"))
 
@@ -111,7 +116,6 @@ async def collect_request(message: types.Message):
         await message.answer("✅ Заявка отправлена! Мы свяжемся с вами в ближайшее время.", reply_markup=menu_kb)
         del user_states[message.from_user.id]
 
-# Кнопка «Помощь»
 @dp.message_handler(lambda m: m.text == "❓ Помощь / О нас")
 async def help_info(message: types.Message):
     await message.answer(
@@ -121,7 +125,6 @@ async def help_info(message: types.Message):
         reply_markup=menu_kb
     )
 
-# Обработка кнопки «✅ Сделано»
 @dp.callback_query_handler(lambda c: c.data.startswith("done_"))
 async def process_done(callback_query: types.CallbackQuery):
     _, req_id_str = callback_query.data.split("_", 1)
@@ -134,8 +137,6 @@ async def process_done(callback_query: types.CallbackQuery):
         await callback_query.answer()
     else:
         await callback_query.answer("Не удалось найти заявку.", show_alert=True)
-
-user_states = {}  # user_id -> {"step": ..., "data": {...}}
 
 if __name__ == "__main__":
     executor.start_polling(dp, skip_updates=True)
