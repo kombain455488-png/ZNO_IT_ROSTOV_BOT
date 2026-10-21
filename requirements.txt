@@ -1,1 +1,7 @@
+--only-binary=:all:
+aiogram==2.25.1
 aiohttp>=3.9,<4.0
+Babel<2.10.0,>=2.9.1
+certifi>=2021.10.8
+magic-filter>=1.0.9
+attrs>=17.3.0
